@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FenixTV</title>
+    <!-- Tailwind CSS para el diseño -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- HLS.js para reproducir streams HLS (.m3u8) -->
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+    <style>
+        body {
+            background-color: #111827;
+            color: #E5E7EB;
+            font-family: 'Inter', sans-serif;
+        }
+        /* Estilo para el elemento enfocado. Es el estándar para TV. */
+        :focus-visible {
+            outline: 3px solid #3B82F6 !important;
+            outline-offset: 2px;
+            transform: scale(1.05);
+            box-shadow: 0 0 15px rgba(59, 130, 246, 0.7);
+            transition: all 0.2s ease-in-out;
+        }
+        .item-card, .filter-button {
+            transition: all 0.2s ease-in-out;
+            position: relative;
+        }
+        /* Ocultar la barra de scroll */
+        #playlist-container::-webkit-scrollbar { display: none; }
+        #playlist-container { -ms-overflow-style: none; scrollbar-width: none; }
+        
+        .filter-button.active { background-color: #3B82F6; color: white; }
+        #search-input { background-color: #374151; color: white; }
+
+        .favorite-icon {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            width: 24px;
+            height: 24px;
+            cursor: pointer;
+            fill: rgba(255, 255, 255, 0.5);
+            transition: all 0.2s ease;
+        }
+        .favorite-icon:hover { fill: rgba(255, 255, 255, 1); }
+        .item-card.is-favorite .favorite-icon { fill: #FBBF24; }
+
+        /* Adaptaciones para WebOS */
+        @media (pointer: coarse) {
+            /* Mejorar el tamaño de los elementos táctiles para TV */
+            .filter-button, .item-card {
+                min-width: 120px;
+                min-height: 60px;
+                font-size: 1.1rem;
+            }
+            #search-input {
+                padding: 12px;
+                font-size: 1.1rem;
+            }
+        }
+    </style>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
+</head>
+<body class="overflow-hidden">
+
+    <div id="loader" class="fixed inset-0 bg-gray-900 bg-opacity-80 flex flex-col justify-center items-center z-50">
+        <svg class="animate-spin h-10 w-10 text-white mb-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+        <p class="text-xl">Cargando playlist...</p>
+    </div>
+
+    <div id="app-container" class="h-screen w-screen flex flex-col p-4 md:p-6 lg:p-8">
+        <header id="header" class="mb-4">
+            <h1 class="text-3xl md:text-4xl font-bold text-white mb-4">Bienvenido a FenixTV</h1>
+            <div class="flex items-center space-x-2 md:space-x-4 flex-wrap">
+                <nav id="filter-nav" class="flex-shrink-0 flex space-x-2 md:space-x-4 mb-2">
+                    <button data-filter="all" tabindex="0" class="filter-button px-4 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 focus:outline-none active">Todos</button>
+                    <button data-filter="favorites" tabindex="0" class="filter-button px-4 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 focus:outline-none">Favoritos</button>
+                    <button data-filter="tv" tabindex="0" class="filter-button px-4 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 focus:outline-none">TV</button>
+                    <button data-filter="movie" tabindex="0" class="filter-button px-4 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 focus:outline-none">Películas</button>
+                    <button data-filter="serie" tabindex="0" class="filter-button px-4 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 focus:outline-none">Series</button>
+                </nav>
+                <div class="flex-grow flex justify-end items-center min-w-[200px]">
+                    <input type="search" id="search-input" tabindex="0" placeholder="Buscar... (presiona 's')" class="w-full max-w-xs p-2 rounded-lg focus:outline-none">
+                </div>
+            </div>
+        </header>
+
+        <main id="playlist-container" class="flex-grow overflow-y-auto grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
+            <!-- Los elementos se insertarán aquí -->
+        </main>
+        
+        <div id="message-container" class="hidden flex-grow justify-center items-center">
+            <p class="text-2xl text-gray-400"></p>
+        </div>
+    </div>
+
+    <div id="player-container" class="hidden fixed inset-0 bg-black z-40 flex justify-center items-center">
+        <video id="video-player" class="w-full h-full" controls autoplay playsinline></video>
+        <button id="close-player" class="absolute top-4 right-4 bg-gray-800 bg-opacity-70 text-white p-2 rounded-full focus:outline-none" tabindex="0">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18"></line>
+                <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+        </button>
+    </div>
+
+    <script>
+        const PLAYLIST_URL = 'https://raw.githubusercontent.com/FenixIPTV/sturdy-telegram/refs/heads/main/playlist.m3u';
+
+        const loader = document.getElementById('loader');
+        const appContainer = document.getElementById('app-container');
+        const playlistContainer = document.getElementById('playlist-container');
+        const messageContainer = document.getElementById('message-container');
+        const playerContainer = document.getElementById('player-container');
+        const videoPlayer = document.getElementById('video-player');
+        const closePlayerBtn = document.getElementById('close-player');
+        const filterNav = document.getElementById('filter-nav');
+        const searchInput = document.getElementById('search-input');
+
+        let fullPlaylist = [];
+        let currentPlaylist = [];
+        let favorites = [];
+        let currentFilter = 'all';
+        let searchTerm = '';
+        let hls = null;
+        let lastFocusedElement = null;
+
+        // Detectar WebOS
+        const isWebOS = (() => {
+            try {
+                return (navigator.userAgent.match(/webOS|hpwOS/i) !== null) || 
+                       (window.PalmSystem !== undefined);
+            } catch (e) {
+                return false;
+            }
+        })();
+
+        document.addEventListener('DOMContentLoaded', initialize);
+
+        async function initialize() {
+            loadFavorites();
+            setupEventListeners();
+            try {
+                const m3uText = await fetchPlaylist(PLAYLIST_URL);
+                fullPlaylist = parseM3U(m3uText);
+                if (fullPlaylist.length > 0) {
+                    renderPlaylist();
+                    // Enfocar el primer filtro al iniciar
+                    document.querySelector('.filter-button').focus();
+                } else {
+                    showMessage('La playlist está vacía o no se pudo procesar.');
+                }
+            } catch (error) {
+                console.error('Error al cargar la playlist:', error);
+                showMessage('No se pudo cargar la playlist. Revisa la URL o tu conexión.');
+            } finally {
+                loader.classList.add('hidden');
+            }
+        }
+
+        function setupEventListeners() {
+            document.addEventListener('keydown', handleKeyDown);
+            filterNav.addEventListener('click', handleFilterClick);
+            searchInput.addEventListener('input', handleSearch);
+            closePlayerBtn.addEventListener('click', stopVideo);
+            
+            // Para WebOS: manejar el botón de retroceso del control remoto
+            if (isWebOS && typeof window.PalmSystem !== 'undefined') {
+                document.addEventListener('keyup', function(e) {
+                    if (e.keyCode === 27 || e.key === 'Backspace') { // ESC o Back
+                        e.preventDefault();
+                        if (!playerContainer.classList.contains('hidden')) {
+                            stopVideo();
+                        } else if (document.activeElement === searchInput) {
+                            searchInput.blur();
+                            document.querySelector('.filter-button.active')?.focus();
+                        }
+                    }
+                });
+            }
+        }
+
+        async function fetchPlaylist(url) {
+            const response = await fetch(url);
+            if (!response.ok) throw new Error(`Error HTTP: ${response.status}`);
+            return await response.text();
+        }
+
+        function parseM3U(m3uText) {
+            const lines = m3uText.split('\n');
+            const playlist = [];
+            let currentItem = {};
+            for (const line of lines) {
+                if (line.startsWith('#EXTINF:')) {
+                    currentItem = {};
+                    const infoLine = line.substring(line.indexOf(' ') + 1);
+                    const nameMatch = infoLine.match(/,(.+)$/);
+                    currentItem.name = nameMatch ? nameMatch[1].trim() : 'Sin Nombre';
+                    const getAttribute = (attr) => {
+                        const regex = new RegExp(`${attr}="([^"]+)"`);
+                        const match = infoLine.match(regex);
+                        return match ? match[1] : null;
+                    };
+                    currentItem.logo = getAttribute('tvg-logo');
+                    currentItem.type = getAttribute('type');
+                    currentItem.group = getAttribute('group-title');
+                    if (!currentItem.type) {
+                        const lowerGroup = (currentItem.group || '').toLowerCase();
+                        if (lowerGroup.includes('movie') || lowerGroup.includes('pelicula')) currentItem.type = 'movie';
+                        else if (lowerGroup.includes('serie')) currentItem.type = 'serie';
+                        else currentItem.type = 'tv';
+                    }
+                } else if (line.trim().startsWith('http')) {
+                    currentItem.url = line.trim();
+                    if (currentItem.name && currentItem.url) {
+                        currentItem.id = playlist.length;
+                        playlist.push(currentItem);
+                    }
+                    currentItem = {};
+                }
+            }
+            return playlist;
+        }
+
+        function loadFavorites() {
+            favorites = JSON.parse(localStorage.getItem('iptv_favorites') || '[]');
+        }
+
+        function saveFavorites() {
+            localStorage.setItem('iptv_favorites', JSON.stringify(favorites));
+        }
+
+        function toggleFavorite(itemId) {
+            const itemIndexInFavorites = favorites.indexOf(itemId);
+            if (itemIndexInFavorites > -1) {
+                favorites.splice(itemIndexInFavorites, 1);
+            } else {
+                favorites.push(itemId);
+            }
+            saveFavorites();
+            renderPlaylist();
+        }
+
+        function renderPlaylist() {
+            const focusedElement = document.activeElement;
+            const focusedId = focusedElement?.dataset?.id;
+
+            playlistContainer.innerHTML = '';
+            
+            let filteredList;
+            if (currentFilter === 'all') filteredList = fullPlaylist;
+            else if (currentFilter === 'favorites') filteredList = fullPlaylist.filter(item => favorites.includes(item.id));
+            else filteredList = fullPlaylist.filter(item => item.type === currentFilter);
+
+            if (searchTerm) {
+                const lowerSearchTerm = searchTerm.toLowerCase();
+                filteredList = filteredList.filter(item => item.name.toLowerCase().includes(lowerSearchTerm));
+            }
+            
+            currentPlaylist = filteredList;
+
+            if (currentPlaylist.length === 0) {
+                let msg = `No se encontraron elementos`;
+                if(searchTerm) msg += ` para "${searchTerm}"`;
+                if(currentFilter !== 'all') msg += ` en "${currentFilter}"`;
+                showMessage(msg + '.');
+                playlistContainer.classList.add('hidden');
+                return;
+            }
+            
+            messageContainer.classList.add('hidden');
+            playlistContainer.classList.remove('hidden');
+
+            currentPlaylist.forEach((item) => {
+                const card = document.createElement('div');
+                const isFav = favorites.includes(item.id);
+                card.className = `item-card bg-gray-800 rounded-lg flex flex-col items-center justify-center text-center p-2 cursor-pointer aspect-video ${isFav ? 'is-favorite' : ''}`;
+                card.dataset.id = item.id;
+                card.tabIndex = 0; // Hacemos que sea enfocable
+
+                card.innerHTML = `
+                    <svg class="favorite-icon" viewBox="0 0 24 24"><path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/></svg>
+                    <img src="${item.logo || 'https://placehold.co/128x72/1F2937/E5E7EB?text=?'}" alt="${item.name}" class="w-16 h-16 object-contain mb-2 pointer-events-none" onerror="this.src='https://placehold.co/128x72/1F2937/E5E7EB?text=?'">
+                    <p class="text-sm font-medium text-gray-300 pointer-events-none">${item.name}</p>
+                `;
+                
+                card.addEventListener('click', (e) => {
+                    if (e.target.closest('.favorite-icon')) {
+                        toggleFavorite(item.id);
+                    } else {
+                        playVideo(item.url);
+                    }
+                });
+
+                // Manejar eventos táctiles para WebOS
+                if (isWebOS) {
+                    card.addEventListener('touchstart', (e) => {
+                        e.preventDefault();
+                        card.focus();
+                    });
+                    card.addEventListener('touchend', (e) => {
+                        e.preventDefault();
+                        if (e.target.closest('.favorite-icon')) {
+                            toggleFavorite(item.id);
+                        } else {
+                            playVideo(item.url);
+                        }
+                    });
+                }
+
+                playlistContainer.appendChild(card);
+            });
+
+            // Intentar restaurar el foco después de renderizar
+            if (focusedId) {
+                const elementToRestoreFocus = document.querySelector(`.item-card[data-id='${focusedId}']`);
+                if (elementToRestoreFocus) {
+                    elementToRestoreFocus.focus();
+                }
+            }
+        }
+
+        function showMessage(text) {
+            playlistContainer.classList.add('hidden');
+            messageContainer.classList.remove('hidden');
+            messageContainer.querySelector('p').textContent = text;
+        }
+
+        function handleKeyDown(e) {
+            // --- MANEJO DEL BOTÓN ATRÁS Y ESCAPE ---
+            if (e.key === 'Escape' || e.keyCode === 27 || e.key === 'Backspace' || e.keyCode === 8) {
+                e.preventDefault();
+                if (!playerContainer.classList.contains('hidden')) {
+                    stopVideo();
+                } else if (document.activeElement === searchInput) {
+                    searchInput.blur();
+                    document.querySelector('.filter-button.active')?.focus();
+                }
+                return;
+            }
+
+            if (!playerContainer.classList.contains('hidden')) return; // No hacer nada más si el player está abierto
+
+            // --- MANEJO DE LA BÚSQUEDA ---
+            if (e.key.toLowerCase() === 's' && document.activeElement !== searchInput) {
+                e.preventDefault();
+                searchInput.focus();
+                return;
+            }
+
+            const currentFocused = document.activeElement;
+            if (!currentFocused) { // Si no hay nada enfocado, enfocar el primer filtro
+                document.querySelector('.filter-button')?.focus();
+                return;
+            }
+            
+            e.preventDefault(); // Prevenir el scroll por defecto del navegador
+
+            const isFilter = currentFocused.classList.contains('filter-button');
+            const isItem = currentFocused.classList.contains('item-card');
+            const isSearch = currentFocused.id === 'search-input';
+
+            const key = e.key;
+            const keyCode = e.keyCode;
+
+            // --- LÓGICA DE NAVEGACIÓN ---
+            if (key === 'ArrowUp' || keyCode === 38) {
+                if (isItem || isSearch) {
+                    document.querySelector('.filter-button.active')?.focus();
+                }
+            } else if (key === 'ArrowDown' || keyCode === 40) {
+                if (isFilter || isSearch) {
+                    document.querySelector('.item-card')?.focus();
+                } else if (isItem) {
+                    const items = Array.from(document.querySelectorAll('.item-card'));
+                    const currentIndex = items.indexOf(currentFocused);
+                    const itemsPerRow = getComputedStyle(playlistContainer).gridTemplateColumns.split(' ').length;
+                    const nextIndex = currentIndex + itemsPerRow;
+                    if (nextIndex < items.length) items[nextIndex].focus();
+                }
+            } else if (key === 'ArrowLeft' || keyCode === 37) {
+                if (isFilter) {
+                    (currentFocused.previousElementSibling || filterNav.lastElementChild)?.focus();
+                } else if (isItem) {
+                    currentFocused.previousElementSibling?.focus();
+                }
+            } else if (key === 'ArrowRight' || keyCode === 39) {
+                if (isFilter) {
+                    (currentFocused.nextElementSibling || filterNav.firstElementChild)?.focus();
+                } else if (isItem) {
+                    currentFocused.nextElementSibling?.focus();
+                } else if (isSearch) {
+                    document.querySelector('.filter-button')?.focus();
+                }
+            } else if (key === 'Enter' || keyCode === 13) {
+                 if (isSearch) { // Si se presiona Enter en la búsqueda, ir a los items
+                    document.querySelector('.item-card')?.focus();
+                } else {
+                    currentFocused.click();
+                }
+            }
+        }
+        
+        function handleFilterClick(e) {
+            const button = e.target.closest('.filter-button');
+            if (button) {
+                currentFilter = button.dataset.filter;
+                document.querySelectorAll('.filter-button').forEach(btn => btn.classList.remove('active'));
+                button.classList.add('active');
+                renderPlaylist();
+            }
+        }
+
+        function handleSearch(e) {
+            searchTerm = e.target.value;
+            renderPlaylist();
+        }
+
+        function playVideo(url) {
+            lastFocusedElement = document.activeElement;
+            appContainer.classList.add('hidden');
+            playerContainer.classList.remove('hidden');
+            closePlayerBtn.focus();
+            
+            if (hls) hls.destroy();
+            if (Hls.isSupported() && url.includes('.m3u8')) {
+                hls = new Hls({
+                    maxBufferLength: 30,
+                    maxMaxBufferLength: 600,
+                    maxBufferSize: 60 * 1000 * 1000,
+                    maxBufferHole: 0.5
+                });
+                hls.loadSource(url);
+                hls.attachMedia(videoPlayer);
+                hls.on(Hls.Events.MANIFEST_PARSED, () => {
+                    videoPlayer.play().catch(e => {
+                        console.error('Error al reproducir:', e);
+                        playNatively(url);
+                    });
+                });
+                hls.on(Hls.Events.ERROR, (event, data) => {
+                    if (data.fatal) {
+                        switch(data.type) {
+                            case Hls.ErrorTypes.NETWORK_ERROR:
+                                hls.startLoad();
+                                break;
+                            case Hls.ErrorTypes.MEDIA_ERROR:
+                                hls.recoverMediaError();
+                                break;
+                            default:
+                                playNatively(url);
+                                break;
+                        }
+                    }
+                });
+            } else {
+                playNatively(url);
+            }
+        }
+        
+        function playNatively(url) {
+            if (videoPlayer.canPlayType('application/vnd.apple.mpegurl')) {
+                videoPlayer.src = url;
+                videoPlayer.play().catch(e => {
+                    console.error('Error al reproducir nativamente:', e);
+                    stopVideo();
+                    showMessage('No se puede reproducir este video.');
+                });
+            } else {
+                stopVideo();
+                showMessage('No se puede reproducir este formato de video.');
+            }
+        }
+
+        function stopVideo() {
+            if (hls) {
+                hls.destroy();
+                hls = null;
+            }
+            videoPlayer.pause();
+            videoPlayer.src = '';
+            playerContainer.classList.add('hidden');
+            appContainer.classList.remove('hidden');
+            // Devolver el foco al último elemento activo antes de reproducir
+            lastFocusedElement?.focus();
+        }
+    </script>
+</body>
+</html>
